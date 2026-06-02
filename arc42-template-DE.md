@@ -30,6 +30,35 @@ Verkäufer:in wählt Produkte aus, das System berechnet Preise und Rabatte autom
 **UC2 Rabattaktion zentral erstellen und verteilen:**
 Marketing erstellt eine Aktion (z. B. „3 für 2"), das System prüft die Regel auf Gültigkeit, speichert und verteilt die Aktion zeitnah an alle betroffenen Trucks. Das PoS wendet die Aktion beim Verkauf automatisch an.
 
+**UC3 – Rabattberechnung am PoS durchführen:**
+**Kurzbeschreibung:** Die PoS App berechnet den Endpreis eines Warenkorbs unter Berücksichtigung aller aktiven Rabattaktionen, zeigt die Ersparnis an und gibt die Daten für den Bon weiter.
+
+**Akteure:** KassiererIn, (indirekt: Marketing)
+
+**Vorbedingungen:**
+- PoS App ist gestartet und betriebsbereit
+- Mindestens ein Artikel ist im Warenkorb
+- Aktionsdefinitionen sind im lokalen Cache vorhanden (auch wenn Cache leer: Berechnung ohne Rabatte, kein Fehler)
+
+**Hauptablauf:**
+1. Kassierer:in hat Artikel im Warenkorb erfasst
+2. Kassierer:in drückt „Bezahlen" oder die Berechnung wird automatisch bei jedem Artikelhinzufügen ausgelöst
+3. PoS App sendet Warenkorb (Artikel, Mengen, Preise, Truck-ID, Zeitstempel) an die lokale Promotion Engine
+4. Promotion Engine gruppiert Artikel und gleicht sie mit aktiven Aktionen ab
+5. Für jede anwendbare Aktion wird der Rabatt berechnet (Prioritätsreihenfolge, Kombinierbarkeitsregeln)
+6. Ergebnis mit Endpreis, Aufschlüsselung und Bon-Texten wird an die PoS App zurückgegeben
+7. PoS App zeigt dem Kassierer den Endpreis und die Ersparnis an
+8. Nach Zahlung werden die Bon-Texte auf den Beleg gedruckt
+
+**Alternativabläufe:**
+- 4a: Keine Aktion ist anwendbar -> Endpreis = Originalpreis, leere `appliedPromotions`-Liste
+- 4b: Promotion Cache ist leer (z. B. Erstinbetriebnahme ohne Sync) -> Berechnung ohne Rabatte, Warnung im Log
+
+**Nachbedingungen:**
+- Endpreis ist berechnet und angezeigt
+- Alle angewendeten Aktionen sind dokumentiert
+- Bon-Texte sind für den Druck bereit
+
 ---
 
 ## 1.2 Funktionale Anforderungen
@@ -40,6 +69,8 @@ Marketing erstellt eine Aktion (z. B. „3 für 2"), das System prüft die Regel
 |---|---|
 | F1 | Artikel können am PoS erfasst werden (Touchscreen oder Scanner). |
 | F2 | Das System berechnet automatisch den Endpreis unter Berücksichtigung aktiver Rabattaktionen. |
+| F2a | Die Rabattberechnung muss eine vollständige Aufschlüsselung aller angewendeten Aktionen zurückgeben, nicht nur den Endpreis |
+| F2b | Für jede angewendete Aktion wird ein menschenlesbarer Bon-Text (savingsMessage) generiert |
 | F3 | Verkäufe werden mit Zeitstempel, Ort, Truck-ID und Verkäufer:in gespeichert. |
 | F4 | Jeder Verkauf wird TSE-konform signiert. |
 | F5 | Belege werden ausgegeben. |
@@ -63,6 +94,7 @@ Marketing erstellt eine Aktion (z. B. „3 für 2"), das System prüft die Regel
 |---|---|
 | F10 | Rabattaktionen können zentral gepflegt werden. |
 | F11 | Unterstützung verschiedener Aktionstypen wie Mengenrabatt, Bundle-Preis, prozentualer Rabatt und Happy Hour. |
+| F11a | Es muss definiert sein, in welcher Reihenfolge mehrere Aktionen auf denselben Warenkorb angewendet werden (Prioritätsregel) |
 | F12 | Aktualisierungen werden zeitnah an alle Trucks verteilt. |
 
 ---
@@ -112,6 +144,7 @@ Marketing erstellt eine Aktion (z. B. „3 für 2"), das System prüft die Regel
 |---|---|
 | NF3 | Das PoS läuft flüssig auf leistungsschwacher Hardware. |
 | NF4 | Preisberechnung und Rabattprüfung erfolgen in unter x Millisekunden. |
+| NF4a | Die Rabattberechnung muss in unter 50 ms abgeschlossen sein (für max. 20 Positionen, 10 aktive Aktionen) |
 | NF5 | Rabattaktionen werden innerhalb weniger Minuten verteilt. |
 
 ---
@@ -148,6 +181,7 @@ Marketing erstellt eine Aktion (z. B. „3 für 2"), das System prüft die Regel
 |---|---|
 | NF11 | Ein Verkaufsvorgang soll mit weniger als fünf Bedienungsaktionen möglich sein. |
 | NF12 | Das System soll schnell einsatzfähig sein. |
+| NF13 | Die Rabattberechnung muss deterministisch sein: identische Eingaben führen immer zum identischen Ergebnis |
 
 ---
 
@@ -448,6 +482,69 @@ Funktionen:
 | Inventory Service | Lagerdaten |
 
 ---
+## 4.7 Promotion Service
+
+### Zweck/Verantwortung
+Die Promotion Engine ist die zentrale Komponente zur Rabattberechnung im Food-Truck-PoS-System. Sie nimmt einen Warenkorb entgegen, prüft alle aktiven Rabattaktionen auf Anwendbarkeit und berechnet den Endpreis unter Berücksichtigung aller gültigen Rabatte. Die Engine gibt den reduzierten Preis sowie eine detaillierte Aufschlüsselung der angewendeten Rabatte zurück, damit der gewährte Vorteil sowohl auf dem PoS-Display als auch auf dem Bon angezeigt werden kann (z. B. „Durch unsere Aktion '3 für 2 Softdrinks' haben Sie 2,50 € gespart!").
+
+  
+Die Promotion Engine läuft **lokal auf dem Tablet/PoS-Device**, um vollständige Offline-Fähigkeit zu gewährleisten. Aktionsdefinitionen werden vorab vom zentralen Promotion Service synchronisiert und in einem lokalen Cache vorgehalten.
+
+---
+### Schnittstellen (extern)
+
+| Schnittstelle | Richtung | Protokoll | Beschreibung |
+|---------------|----------|-----------|--------------|
+| `POST /api/v1/promotions/calculate` | Eingehend (PoS App → Engine) | HTTP/REST (lokal) | PoS App sendet Warenkorb zur Preisberechnung. Synchroner Aufruf, Antwort enthält Endpreis und Rabattdetails. |
+| `GET /api/v1/promotions/active` | Eingehend (Engine → Promotion Service) | HTTP/REST (Netzwerk) | Truck ruft aktive Aktionsdefinitionen vom zentralen Promotion Service ab (Delta-Sync). |
+| Response `CartResponse` | Ausgehend (Engine → PoS App) | HTTP/REST (lokal) | Antwort mit `originalTotal`, `totalDiscount`, `finalTotal`, `appliedPromotions[]` und `lineItems[]`. |
+
+**Annahme A6:** Die PoS App übergibt Bruttopreise (inkl. MwSt.) als `unitPrice`. Die Rabattberechnung erfolgt auf Bruttobasis.
+
+### Datenfluss: Was wird an den Client zurückgesendet?
+
+| Feld | Typ | Beschreibung |
+|------|-----|--------------|
+| `originalTotal` | Decimal | Gesamtpreis des Warenkorbs vor allen Rabatten |
+| `totalDiscount` | Decimal | Summe aller gewährten Rabatte |
+| `finalTotal` | Decimal | Endpreis nach Abzug aller Rabatte. Invariante: `finalTotal = originalTotal − totalDiscount` |
+| `appliedPromotions` | Array\<AppliedPromotion\> | Liste aller angewendeten Aktionen mit `promotionId`, `promotionName`, `promotionType`, `discountAmount`, `affectedItems[]` und **`savingsMessage`** |
+| `lineItems` | Array\<LineItem\> | Aufgeschlüsselte Einzelposten mit `originalSubtotal`, `discountApplied` und `finalSubtotal` pro Artikel |
+
+Jede `AppliedPromotion` enthält ein Feld **`savingsMessage`** – einen vorgefertigten Anzeigetext für den Bon:
+- „Aktion '3 für 2 Softdrinks': Sie sparen 2,00 €!"
+- „Happy Hour (14–16 Uhr): Sie sparen 3,28 €!"
+
+  ### Interne Kommunikationsbeziehungen
+
+  
+
+| Von                         | Nach                | Art                                      | Daten                         | Beschreibung                                                           |
+| --------------------------- | ------------------- | ---------------------------------------- | ----------------------------- | ---------------------------------------------------------------------- |
+| PoS App                     | CartAnalyzer        | Synchroner HTTP-Call (lokal)             | `CartRequest`                 | Einstiegspunkt: PoS App ruft `POST /api/v1/promotions/calculate` auf   |
+| CartAnalyzer                | PromotionMatcher    | Synchroner Funktionsaufruf               | `GroupedCart`                 | Übergibt validierte und gruppierte Warenkorbdaten                      |
+| PromotionMatcher            | PromotionCache      | Synchroner Lesezugriff (SQLite)          | `PromotionDefinition[]`       | Liest alle aktiven Aktionsdefinitionen aus dem lokalen Cache           |
+| PromotionMatcher            | DiscountCalculator  | Synchroner Funktionsaufruf               | `ApplicablePromotion[]`       | Übergibt sortierte Liste anwendbarer Aktionen mit zugehörigen Artikeln |
+| DiscountCalculator          | PromotionStrategy   | Synchroner Funktionsaufruf (Polymorphie) | `CartItem[]`, `PromotionRule` | Delegiert Berechnung an konkrete Strategie (Strategy Pattern)          |
+| DiscountCalculator          | PriceAggregator     | Synchroner Funktionsaufruf               | `DiscountResult[]`            | Übergibt berechnete Einzelrabatte zur Aggregation                      |
+| PriceAggregator             | BonMessageGenerator | Synchroner Funktionsaufruf               | `AppliedPromotion[]`          | Übergibt angewendete Aktionen zur Textgenerierung                      |
+| BonMessageGenerator         | PriceAggregator     | Rückgabewert                             | `String[]`                    | Liefert `savingsMessage`-Texte zurück                                  |
+| PriceAggregator             | PoS App             | HTTP-Response                            | `CartResponse`                | Vollständige Antwort mit Endpreis, Aufschlüsselung und Bon-Texten      |
+| Promotion Service (zentral) | PromotionCache      | REST GET (Netzwerk)                      | `PromotionDefinition[]`       | Delta-Sync: nur Änderungen seit letztem Sync                           |
+
+
+---
+### Klassendiagramm: Rabattaktionstypen
+
+![[Pasted image 20260602072907.png]]
+**Berechnungslogik je Strategie:**
+
+| Strategie              | Eingabe                                                     | Logik                                                                                                                                                                                                    | Ausgabe                                                     |
+| ---------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| **BuyXGetYFree**       | Softdrink-Artikel im Warenkorb, `buyCount=3`, `freeCount=1` | Sortiere betroffene Artikel nach Preis aufsteigend. Für je `buyCount` Artikel: die `freeCount` günstigsten werden kostenlos. Wiederholbar bei Vielfachen.                                                | `discountAmount` = Summe der Preise der kostenlosen Artikel |
+| **PercentageDiscount** | Betroffene Artikel, `percentage=20`                         | `rabatt = unitPrice × (percentage / 100)` pro Artikel. Auf jede Einheit einzeln angewendet.                                                                                                              | `discountAmount` = Summe aller Einzelrabatte                |
+| **BundlePrice**        | Bundle-Artikel, `bundleItems`, `bundlePrice`                | Prüfe ob alle Bundle-Artikel im Warenkorb. Wenn ja: Gesamtpreis der Einzelpreise wird durch `bundlePrice` ersetzt.                                                                                       | `discountAmount` = Σ(Einzelpreise) − bundlePrice            |
+| **HappyHourDiscount**  | Alle Artikel, `percentage`, `startTime`, `endTime`          | Wie PercentageDiscount, aber nur anwendbar wenn `timestamp` zwischen `startTime` und `endTime` liegt. Wird auf den ggf. bereits reduzierten Preis angewendet (weil kombinierbar + niedrigere Priorität). | `discountAmount` = Summe der prozentualen Rabatte           |
 
 # 5. Laufzeitsicht 
 
@@ -592,3 +689,9 @@ Im Rahmen der Architekturentwicklung wurden verschiedene Lösungsansätze analys
 | Promotion Service | Verwaltet Rabattaktionen und Angebote |
 | Inventory Service | Verwaltet Lagerbestände und Nachbestellungen |
 | Reporting Service | Analysiert Verkaufs-, Rabatt- und Lagerdaten |
+| Promotion Engine | Komponente zur Berechnung von Rabatten auf einen Warenkorb |
+| Inventory Sync | Mechanismus zur Übermittlung von Bestandsänderungen vom Truck an die Zentrale |
+| Eventual Consistency | Konsistenzmodell, bei dem Daten zeitverzögert synchronisiert werden |
+| Idempotenz | Eigenschaft einer Operation, bei mehrfacher Ausführung dasselbe Ergebnis zu liefern |
+| Strategy Pattern | Entwurfsmuster zur Kapselung austauschbarer Algorithmen |
+| Delta-Sync | Synchronisierung, bei der nur Änderungen seit dem letzten Abgleich übertragen werden |
