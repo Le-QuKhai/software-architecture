@@ -59,6 +59,64 @@ Marketing erstellt eine Aktion (z. B. „3 für 2"), das System prüft die Regel
 - Alle angewendeten Aktionen sind dokumentiert
 - Bon-Texte sind für den Druck bereit
 
+**UC2: „Bestandsänderung verarbeiten“**
+
+Kurzbeschreibung: Dieser Use Case beschreibt den Ablauf von der Erfassung der verbrauchten Waren am Food-Truck bis hin zur Beauftragung von Nachschub durch ein externes Tourenplanungssystem. 
+
+**Akteure: **
+
+PoS-System (Kasse im Food-Truck): Sendet die Verbrauchsdaten. 
+
+Backend-System (Unser System): Verarbeitet die Daten und trifft Entscheidungen. 
+
+Tourenplanungssystem (Extern): Nimmt Transportaufträge entgegen. 
+
+ 
+
+**Fachlicher Ablauf (Standard-Szenario):** 
+
+Trigger: Bei jedem Verkauf (oder alternativ alle 15 Minuten) meldet das PoS-System des Trucks den aktuellen Bestand der verbrauchten Zutaten an das Backend (z. B. -1 Burger-Bun, -1 Patty). 
+
+Prüfung: Das Backend empfängt die Meldung und aktualisiert den virtuellen Lagerbestand des jeweiligen Trucks. 
+
+Schwellenwert-Kontrolle: Das Backend vergleicht den neuen Bestand mit dem festgelegten Meldebestand (Minimum) der jeweiligen Zutat. 
+
+Bedarfsermittlung: Unterschreitet eine Zutat den Meldebestand, berechnet das Backend die benötigte Nachschubmenge (Ziel: Auffüllen bis zum Maximalbestand des Trucks). 
+
+Auftragserstellung: Das Backend bündelt alle aktuell benötigten Zutaten für diesen Truck und generiert einen Transportauftrag. 
+
+Externe Beauftragung: Der Transportauftrag (inklusive Truck-Standort, benötigter Waren und Zeitfenster) wird an das externe Tourenplanungssystem übergeben, welches die Route für den Lieferwagen berechnet. 
+
+ 
+
+**Annahmen:** 
+
+Zentrallager: Es gibt ein zentrales Lager in der Stadt, aus dem die Lieferwagen (Sprinter) starten. Dieses Zentrallager hat immer ausreichend Ware vorrätig. 
+
+Zutaten-Level: Der Bestand wird nicht in fertigen Gerichten gemessen (nicht "10 Burger übrig"), sondern auf Zutatenebene (Brötchen, Fleisch, Salat, Soße), da diese in verschiedenen Gerichten verwendet werden können. 
+
+Artikel: Jeder Artikel besitzt einen definierten Mindestbestand und Jeder Artikel wird eindeutig über eine Artikelnummer identifiziert. 
+
+Standorte: Die Food-Trucks haben feste Standplätze für den Tag. Ein Truck bewegt sich nicht, während er auf eine Nachschublieferung wartet. 
+
+Keine Offlinefähigkeit der PoS-Systeme 
+
+Gemäß der Systemanforderungen müssen die Kassensysteme (PoS) in den Trucks keine Offlinefähigkeit unterstützen.  
+
+Begründung und Auswirkung auf die Fachlichkeit: Wir gehen davon aus, dass unsere Food-Trucks ausschließlich in städtischen oder gut angebundenen Gebieten (z. B. auf Festivals) mit lückenloser 4G/5G-Netzabdeckung betrieben werden. Jeder Verkauf wird sofort (in Echtzeit) an das Backend gesendet. Dadurch entfallen komplexe Synchronisationsprozesse.
+
+**Fachliche Regeln (Business Rules) **
+
+ *Regel 1: Sperrfrist / Kein Doppel-Nachschub* 
+Für denselben Bedarf darf kein doppelter Transportauftrag erstellt werden, bis die laufende Lieferung als "abgeschlossen" gemeldet wurde. 
+*Regel 2 Sammelbestellungen* 
+Unterschreitet eine Zutat den Meldebestand, wartet das System für 5 Minuten, ob noch weitere Zutaten dieses Trucks in den kritischen Bereich fallen. So wird vermieden, dass für jedes fehlende Salatblatt ein eigener Lieferauftrag erstellt wird. 
+*Regel 3 Lieferpriorität* 
+Transportaufträge müssen mit einer Dringlichkeitsstufe an das Tourenplanungssystem übergeben werden. Fällt der Bestand einer Hauptzutat (z. B. Burger-Patties) auf 0, erhält der Auftrag die höchste Priorität (Notfall-Lieferung). 
+*Regel 4  Bestandsänderungen*
+Bestandsänderungen müssen einem Truck zugeordnet sein 
+
+
 ---
 
 ## 1.2 Funktionale Anforderungen
@@ -452,10 +510,147 @@ Funktionen:
 ### Schnittstellen
 
 | Schnittstelle | Beschreibung |
-|---|---|
-| Procurement API | Waren nachbestellen |
-| Reporting API | Lagerdaten bereitstellen |
+|---|---|---|
+| Procurement API | Waren nachbestellen ||
+| Reporting API | Lagerdaten bereitstellen ||
+|Order Service | Bestandsänderungen erhalten|POST /api/v1/inventory/stock-changes|
+|Order Service | Bestand eines Trucks abrufen| GET /api/v1/trucks/{truckId}/inventory|
 
+**POST /api/v1/inventory/stock-changes Nachrichten**
+*SALE* 
+
+{ 
+ "messageId": "msg-1002", 
+ "sourceContext": "ORDER", 
+ "sourceReferenceId": "order-77", 
+ "truckId": "truck-42", 
+ "articleId": "burger-patty", 
+ "changeType": "SALE", 
+ "quantityDelta": -2, 
+ "occurredAt": "2026-06-21T12:35:00Z" 
+} 
+
+*CANCEL* 
+
+{ 
+ "messageId": "msg-1003", 
+ "sourceContext": "ORDER", 
+ "sourceReferenceId": "order-77", 
+ "reversesMessageId": "msg-1002", 
+ "truckId": "truck-42", 
+ "articleId": "burger-patty", 
+ "changeType": "CANCEL", 
+ "quantityDelta": 2, 
+ "occurredAt": "2026-06-21T12:40:00Z" 
+} 
+
+*RESTOCK* 
+
+{ 
+ "messageId": "msg-2001", 
+ "sourceContext": "PROCUREMENT", 
+ "sourceReferenceId": "transportOrder-to-5001", 
+ "truckId": "truck-42", 
+ "articleId": "burger-patty", 
+ "changeType": "RESTOCK", 
+ "quantityDelta": 50, 
+ "occurredAt": "2026-06-21T15:55:00Z" 
+} 
+
+*CORRECTION* 
+
+{ 
+ "messageId": "msg-3001", 
+ "sourceContext": "ADMIN", 
+ "sourceReferenceId": "manual-check-88", 
+ "truckId": "truck-42", 
+ "articleId": "burger-patty", 
+ "changeType": "CORRECTION", 
+ "quantityDelta": -5, 
+ "occurredAt": "2026-06-21T16:10:00Z" 
+} 
+**GET /api/v1/trucks/{truckId}/inventory Nachrichten**
+{ 
+ "truckId": "truck-42", 
+ "items": [ 
+   { 
+     "articleId": "burger-patty", 
+     "currentQuantity": 49, 
+     "reorderThreshold": 50, 
+     "targetQuantity": 100, 
+     "status": "LOW_STOCK" 
+   } 
+ ] 
+} 
+
+###Inventory Context 
+
+**InventoryItem**
+
+*Attribute:*
+
+- inventoryItemId 
+
+- truckId 
+
+- articleId 
+
+- currentQuantity 
+
+- reorderThreshold 
+
+- targetQuantity 
+
+- updatedAt 
+
+*Bedeutung:* 
+Ein InventoryItem beschreibt den aktuellen Bestand eines Artikels in einem bestimmten Truck. 
+
+**StockChange** 
+
+*Attribute:* 
+
+- stockChangeId 
+
+- messageId 
+
+- sourceContext 
+
+- sourceReferenceId 
+
+- reversesMessageId 
+
+- truckId 
+
+- articleId 
+
+- changeType 
+
+- quantityDelta 
+
+- occurredAt 
+
+- processedAt 
+
+*Bedeutung:* 
+Ein StockChange beschreibt eine einzelne Bestandsänderung. 
+
+*Mögliche changeTypes:* 
+
+- SALE 
+
+- CANCEL 
+
+ - RESTOCK 
+
+- CORRECTION 
+**InventoryStatus** 
+
+- OK 
+
+- LOW_STOCK 
+
+- OUT_OF_STOCK 
 ---
 
 ## 4.6 Reporting Service
@@ -546,6 +741,95 @@ Jede `AppliedPromotion` enthält ein Feld **`savingsMessage`** – einen vorgefe
 | **BundlePrice**        | Bundle-Artikel, `bundleItems`, `bundlePrice`                | Prüfe ob alle Bundle-Artikel im Warenkorb. Wenn ja: Gesamtpreis der Einzelpreise wird durch `bundlePrice` ersetzt.                                                                                       | `discountAmount` = Σ(Einzelpreise) − bundlePrice            |
 | **HappyHourDiscount**  | Alle Artikel, `percentage`, `startTime`, `endTime`          | Wie PercentageDiscount, aber nur anwendbar wenn `timestamp` zwischen `startTime` und `endTime` liegt. Wird auf den ggf. bereits reduzierten Preis angewendet (weil kombinierbar + niedrigere Priorität). | `discountAmount` = Summe der prozentualen Rabatte           |
 
+## 4.8 Procurement Service
+### Zweck / Verantwortung
+
+Der Procurement Service ist für die Sammlung von Bestellanforderungen und die Bestellungen verantwortlich.
+
+Funktionen:
+
+- Bestellanforderungen erhalten
+- Bestellung anfordern (extern)
+
+---
+
+### Schnittstellen
+
+| Schnittstelle | Beschreibung |
+|---|---|
+|GET /api/v1/restock-requests?status=OPEN|Offene Requests abrufen|
+|POST /api/v1/restock-requests/{restockRequestId}/transport-order | TransportOrder für RestockRequest erstellen|
+|GET /api/v1/transport-orders/{transportOrderId}|Status eines Transportauftrags abrufen|
+
+###Procurement Context 
+
+**RestockRequest**
+*Attribute: *
+- restockRequestId 
+- truckId 
+- status 
+- priority 
+- createdAt 
+- updatedAt 
+*Bedeutung:* 
+Ein RestockRequest beschreibt, dass ein Truck Nachschub benötigt. 
+
+**RestockRequestItem **
+
+*Attribute:* 
+
+- restockRequestItemId 
+
+ -restockRequestId 
+
+- articleId 
+
+- requiredQuantity 
+
+*Bedeutung:* 
+Ein RestockRequestItem beschreibt, welcher Artikel in welcher Menge nachgefüllt werden soll. 
+
+**TransportOrder** 
+
+*Attribute:* 
+
+- transportOrderId 
+
+- restockRequestId 
+
+- truckId 
+
+- externalSystem 
+
+- externalOrderId 
+
+- status 
+
+- createdAt 
+
+- plannedDeliveryTime 
+
+*Bedeutung:* 
+Ein TransportOrder ist der Transportauftrag, der an MultiRoute Tour! übermittelt wird. 
+
+### RestockRequestStatus
+- OPEN 
+
+- TRANSPORT_REQUESTED 
+
+- FULFILLED 
+
+- CANCELLED 
+###TransportOrderStatus
+- CREATED 
+
+- SENT_TO_MULTIROUTE 
+
+- PLANNED 
+
+- FAILED 
+
+DELIVERED 
 # 5. Laufzeitsicht 
 
 # 5.1 Zugehöriger Use Case
@@ -580,6 +864,47 @@ Bon erstellt
 ### Sequenzdiagramm
 
 ![Diagramm](images/laufzeitsicht.png)
+
+# 5.2 weiterer Use Case
+##UC2: Bestandsveränderung verarbeiten
+**Vollständiger Prozess** 
+
+*Ausgangslage:* 
+
+- Truck truck-42 hat 51 Burger-Patties. 
+
+- Meldebestand ist 50. 
+
+- Zielbestand ist 100. 
+
+1. Es werden 2 Burger verkauft. 
+
+2. Die OrderComponent sendet eine SALE-Bestandsänderung mit quantityDelta = -2. 
+
+3. Die InventoryComponent reduziert den Bestand von 51 auf 49. 
+
+4. 49 liegt unter dem Meldebestand 50. 
+
+5. Die InventoryComponent meldet Nachschubbedarf an die ProcurementComponent. 
+
+6. Die ProcurementComponent erstellt einen RestockRequest. 
+
+7. Benötigte Menge: 100 - 49 = 51. 
+
+8. Nach 5 Minuten erstellt die ProcurementComponent einen TransportOrder. 
+
+9. Der MultiRouteTourAdapter sendet den TransportOrder an MultiRoute Tour!. 
+
+10, MultiRoute Tour! plant die Lieferung. 
+
+11. Nach Lieferung wird ein RESTOCK mit quantityDelta = 51 an die InventoryComponent gesendet. 
+
+12. Der Bestand steigt von 49 auf 100. 
+
+13. Der RestockRequest erhält den Status FULFILLED.
+
+## Sequenzdiagramm 
+![Diagramm](Bilder/bestand.png)
 
 ---
 
@@ -657,10 +982,7 @@ Die Services laufen innerhalb eines NestJS-Servers.
 
 Externe Systeme werden über APIs angebunden:
 
-- Payment APIs
-- TSE APIs
-- Export APIs
-- Social APIs
+- Payment APIs<img width="1264" height="846" alt="bestand" src="https://github.com/user-attachments/assets/340ff012-9dd3-415f-8fdf-3895378f1604" /><img width="1264" height="846" alt="bestand" src="https://github.com/user-attachments/assets/e58c0d04-45e3-47cc-8a7a-6a648abefcf8" />
 
 Diese Systeme liegen außerhalb der direkten Kontrolle des Unternehmens.
 
