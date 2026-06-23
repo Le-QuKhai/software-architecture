@@ -509,7 +509,7 @@ Funktionen:
 
 ### Schnittstellen
 
-| Schnittstelle | Beschreibung |
+| Schnittstelle | Beschreibung | |
 |---|---|---|
 | Procurement API | Waren nachbestellen ||
 | Reporting API | Lagerdaten bereitstellen ||
@@ -517,6 +517,7 @@ Funktionen:
 |Order Service | Bestand eines Trucks abrufen| GET /api/v1/trucks/{truckId}/inventory|
 
 **POST /api/v1/inventory/stock-changes Nachrichten**
+
 *SALE* 
 
 { 
@@ -583,7 +584,7 @@ Funktionen:
  ] 
 } 
 
-###Inventory Context 
+### Inventory Context 
 
 **InventoryItem**
 
@@ -761,10 +762,10 @@ Funktionen:
 |POST /api/v1/restock-requests/{restockRequestId}/transport-order | TransportOrder für RestockRequest erstellen|
 |GET /api/v1/transport-orders/{transportOrderId}|Status eines Transportauftrags abrufen|
 
-###Procurement Context 
+### Procurement Context 
 
 **RestockRequest**
-*Attribute: *
+*Attribute:*
 - restockRequestId 
 - truckId 
 - status 
@@ -774,7 +775,7 @@ Funktionen:
 *Bedeutung:* 
 Ein RestockRequest beschreibt, dass ein Truck Nachschub benötigt. 
 
-**RestockRequestItem **
+**RestockRequestItem**
 
 *Attribute:* 
 
@@ -866,7 +867,7 @@ Bon erstellt
 ![Diagramm](images/laufzeitsicht.png)
 
 # 5.2 weiterer Use Case
-##UC2: Bestandsveränderung verarbeiten
+## UC2: Bestandsveränderung verarbeiten
 **Vollständiger Prozess** 
 
 *Ausgangslage:* 
@@ -904,8 +905,7 @@ Bon erstellt
 13. Der RestockRequest erhält den Status FULFILLED.
 
 ## Sequenzdiagramm 
-![Diagramm](Bilder/bestand.png)
-<img width="1264" height="846" alt="bestand" src="https://github.com/user-attachments/assets/340ff012-9dd3-415f-8fdf-3895378f1604" /><img width="1264" height="846" alt="bestand" src="https://github.com/user-attachments/assets/e58c0d04-45e3-47cc-8a7a-6a648abefcf8" />
+<img width="1264" height="846" alt="bestand" src="https://github.com/user-attachments/assets/340ff012-9dd3-415f-8fdf-3895378f1604" />
 ---
 
 # 6. Verteilungssicht
