@@ -905,7 +905,7 @@ Bon erstellt
 
 ## Sequenzdiagramm 
 ![Diagramm](Bilder/bestand.png)
-
+<img width="1264" height="846" alt="bestand" src="https://github.com/user-attachments/assets/340ff012-9dd3-415f-8fdf-3895378f1604" /><img width="1264" height="846" alt="bestand" src="https://github.com/user-attachments/assets/e58c0d04-45e3-47cc-8a7a-6a648abefcf8" />
 ---
 
 # 6. Verteilungssicht
@@ -982,7 +982,7 @@ Die Services laufen innerhalb eines NestJS-Servers.
 
 Externe Systeme werden über APIs angebunden:
 
-- Payment APIs<img width="1264" height="846" alt="bestand" src="https://github.com/user-attachments/assets/340ff012-9dd3-415f-8fdf-3895378f1604" /><img width="1264" height="846" alt="bestand" src="https://github.com/user-attachments/assets/e58c0d04-45e3-47cc-8a7a-6a648abefcf8" />
+- Payment APIs
 
 Diese Systeme liegen außerhalb der direkten Kontrolle des Unternehmens.
 
