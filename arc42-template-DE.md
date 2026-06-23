@@ -695,3 +695,191 @@ Im Rahmen der Architekturentwicklung wurden verschiedene Lösungsansätze analys
 | Idempotenz | Eigenschaft einer Operation, bei mehrfacher Ausführung dasselbe Ergebnis zu liefern |
 | Strategy Pattern | Entwurfsmuster zur Kapselung austauschbarer Algorithmen |
 | Delta-Sync | Synchronisierung, bei der nur Änderungen seit dem letzten Abgleich übertragen werden |
+
+# 7. KI-gestützte Codegenerierung
+
+> Dieses Kapitel dokumentiert die experimentelle Anwendung generativer KI auf unseren
+> arc42-Architekturentwurf, um den Übergang von der Architektur (Kap. 3–6) zur Implementierung
+> zu automatisieren. Untersuchungsgegenstand ist der Use Case **„Bestandsänderung verarbeiten"**
+> mit den Bausteinen **Inventory Service** (Kap. 4.5) und **Procurement Service** (Kontextabgrenzung, Kap. 3).
+
+## 7.1 Zielsetzung
+
+Wir untersuchen, ob aus einer arc42-konformen Architekturbeschreibung **konsistente und lauffähige
+Code-Artefakte** erzeugt werden können. Konkret prüfen wir:
+
+- Lässt sich die **Bausteinsicht** (Bounded Contexts, Komponenten) verlustfrei in eine Paket-/Schichtenstruktur überführen?
+- Werden **Schnittstellen, Datenmodell und Statuswerte** aus der Spezifikation korrekt übernommen?
+- Werden die fachlichen **Business Rules** als Domänencode abgebildet?
+- Wie groß ist der verbleibende manuelle Aufwand (Mensch-im-Loop)?
+
+## 7.2 Vorgehen
+
+Als Werkzeug haben wir das LLM **Claude (Anthropic)** eingesetzt. Das Vorgehen war *spezifikationsgetrieben*
+und iterativ mit dem Menschen als Reviewer.
+
+```mermaid
+flowchart LR
+    A[arc42-Doku<br/>Kap. 3–6 + Schnittstellen-/Datenmodell-Spezifikation] --> B[Prompt<br/>Rolle: DDD-Entwickler<br/>Vorgabe: Schichtenarchitektur]
+    B --> C[Schritt 1<br/>Rückfragen + Annahmen]
+    C --> D[Schritt 2<br/>Designentscheidungen + Begründung]
+    D --> E[Schritt 3<br/>Code-Generierung]
+    E --> F[Review durch Mensch<br/>Annahmen prüfen, Build/Test]
+    F -->|Korrekturen| B
+```
+
+Wesentliche Elemente der Prompt-Strategie:
+
+| Element | Umsetzung | Zweck |
+|---|---|---|
+| **Rollenvorgabe** | „Erfahrener Java-Entwickler für DDD" | Aktiviert passende Muster (Aggregate, Repositories, Ports) |
+| **Architekturvorgabe** | „Spring Boot, einfache DDD, Schichtenarchitektur" | Verhindert beliebige Strukturwahl, erzwingt unsere Lösungsstrategie (Kap. 4) |
+| **Strukturierter Input** | Schnittstellen, Datenmodell, Statuswerte, Business Rules als expliziter Kontext | Maximiert Konsistenz zwischen Doku und Code |
+| **Iteratives Protokoll** | Erst Fragen → dann Entscheidungen → dann Code | Mehrdeutigkeiten werden vor der Generierung sichtbar gemacht |
+| **Mensch-im-Loop** | Annahmen werden dokumentiert und freigegeben | Qualitätssicherung, keine „Black-Box"-Generierung |
+
+Offene Punkte der Spezifikation (z. B. „5 Minuten warten" für Sammelbestellungen, Definition „Hauptzutat")
+wurden vom Werkzeug **nicht stillschweigend geraten**, sondern als explizite Annahmen ausgewiesen und von uns entschieden.
+
+## 7.3 Technologieentscheidungen
+
+| Aspekt | Entscheidung | Begründung |
+|---|---|---|
+| **Programmiersprache** | Java 21 (LTS) | Teamkompetenz; arc42 beschreibt serverseitige *Services*; starke Typisierung passt zu DDD; LTS-Support |
+| **Framework** | Spring Boot 3.3 | De-facto-Standard für REST-Backends; Dependency Injection unterstützt die Schichtentrennung; schnelles Bootstrapping |
+| **Persistenz** | Spring Data JPA + H2 (In-Memory) | Minimaler Setup-Aufwand für eine lauffähige Demo; `Repository`-Abstraktion deckt sich mit dem DDD-Repository-Muster; produktiv gegen PostgreSQL austauschbar |
+| **API-Stil** | REST / JSON | Entspricht 1:1 den in der Doku spezifizierten Endpunkten (Abschnitt „Schnittstellen") |
+| **Kontext-Kopplung** | Spring Application Events (synchron) | Lose Kopplung der Bounded Contexts ohne direkte Abhängigkeit zwischen Inventory und Procurement |
+| **Build / Laufzeit** | Maven, JRE 21 | Reproduzierbarer Build; weit verbreitet im Team und in CI |
+
+Diese Wahl ist bewusst **demo-orientiert**: H2 und der explizite Demo-Endpunkt zur Transportauftrags-Erstellung
+senken die Einstiegshürde, ohne die Zielarchitektur zu verfälschen (austauschbare Infrastruktur, vgl. Kap. 6).
+
+## 7.4 Generierte Code-Artefakte
+
+Das Werkzeug erzeugte ein vollständiges Maven-Projekt (41 Java-Dateien) mit folgender Schichtung pro Bounded Context:
+
+```
+web            -> REST-Controller + Request/Response-DTOs        (Presentation)
+application    -> Anwendungsfälle / Orchestrierung + Ports        (Application)
+domain         -> Aggregate, Entitäten, Enums, Repository-Interfaces (Domain)
+infrastructure -> Adapter zu externen Systemen                    (Infrastructure)
+```
+
+### Nachvollziehbarkeit (Traceability arc42 → Code)
+
+| arc42-Element | Generiertes Code-Artefakt |
+|---|---|
+| Baustein *Inventory Service* (Kap. 4.5) | Paket `com.foodtruck.inventory` (domain/application/web) |
+| Baustein *Procurement Service* (Kap. 3) | Paket `com.foodtruck.procurement` |
+| Externes System *MultiRoute Tour!* (Kap. 6 External Systems) | `MultiRouteTourGateway` (Port) + `MultiRouteTourAdapter` (Anti-Corruption-Layer) |
+| Datenmodell `InventoryItem`, `StockChange`, `RestockRequest`, `TransportOrder` | gleichnamige JPA-Aggregate/Entitäten |
+| Statuswerte (`InventoryStatus`, `RestockRequestStatus`, …) | gleichnamige Java-`enum`s |
+| Endpunkte (POST stock-changes, GET inventory, …) | `InventoryController`, `ProcurementController` |
+| Business Rules 1–4 | Domänenmethoden + Application-Service-Logik (s. u.) |
+
+### Beispiel 1 – Business Rule im Aggregate (Domänenschicht)
+
+Die Schwellenwert- und Statuslogik aus der Spezifikation wurde direkt in das Aggregat `InventoryItem` übersetzt:
+
+```java
+public boolean isBelowThreshold() {          // "Unterschreitet eine Zutat den Meldebestand"
+    return currentQuantity < reorderThreshold;
+}
+
+public int requiredRefillQuantity() {         // Auffüllen bis zum Zielbestand
+    return Math.max(0, targetQuantity - currentQuantity);
+}
+
+public InventoryStatus status() {
+    if (currentQuantity <= 0)               return InventoryStatus.OUT_OF_STOCK;
+    if (currentQuantity < reorderThreshold) return InventoryStatus.LOW_STOCK;
+    return InventoryStatus.OK;
+}
+```
+
+### Beispiel 2 – Lose Kopplung der Kontexte über ein Domain-Event (Applikationsschicht)
+
+```java
+if (item.isBelowThreshold()) {
+    eventPublisher.publishEvent(new StockBelowThresholdEvent(
+        item.getTruckId(), item.getArticleId(),
+        item.requiredRefillQuantity(), item.isOutOfStock()));   // -> Procurement reagiert
+}
+```
+
+### Beispiel 3 – Anbindung des externen Systems über einen Adapter (Infrastrukturschicht)
+
+```java
+@Component
+public class MultiRouteTourAdapter implements MultiRouteTourGateway {
+    @Override
+    public MultiRouteDispatchResult dispatch(MultiRouteDispatchCommand command) {
+        // Übersetzung in das externe Auftragsformat (Anti-Corruption-Layer);
+        // interne Domänenobjekte werden NICHT nach außen gereicht.
+        ...
+        return new MultiRouteDispatchResult(externalOrderId, plannedDeliveryTime);
+    }
+}
+```
+
+## 7.5 Lauffähiges Beispiel und Live-Demo
+
+Das generierte Projekt ist ausführbar. Für die Live-Demo am Praktikumstermin wird der in der
+Spezifikation beschriebene Beispielprozess (truck-42, Burger-Patties) nachgespielt.
+
+**Start:**
+```bash
+mvn spring-boot:run        # H2-Konsole: http://localhost:8080/h2-console
+```
+
+**Demo-Ablauf (reproduziert das Doku-Beispiel):**
+
+| Schritt | Aktion | Erwartetes Ergebnis |
+|---|---|---|
+| 1 | `GET /api/v1/trucks/truck-42/inventory` | `burger-patty`: 51 Stück, Status `OK` |
+| 2 | `POST /api/v1/inventory/stock-changes` (SALE −2) | Bestand 49 < Meldebestand 50 → Event ausgelöst |
+| 3 | `GET /api/v1/restock-requests?status=OPEN` | offener Request, `requiredQuantity` = 100 − 49 = 51 |
+| 4 | `POST /api/v1/restock-requests/{id}/transport-order` | `TransportOrder` erzeugt, an *MultiRoute Tour!* übergeben, Status `PLANNED` |
+| 5 | `GET /api/v1/transport-orders/{id}` | externe Auftrags-ID `MR-…`, Status `PLANNED` |
+| 6 | `POST /api/v1/inventory/stock-changes` (RESTOCK +51) | Bestand 100 → Request `FULFILLED`, Order `DELIVERED` |
+
+```bash
+# Beispiel Schritt 2 (Verkauf von 2 Patties)
+curl -X POST http://localhost:8080/api/v1/inventory/stock-changes \
+  -H "Content-Type: application/json" \
+  -d '{"messageId":"msg-1002","sourceContext":"ORDER","truckId":"truck-42",
+       "articleId":"burger-patty","changeType":"SALE","quantityDelta":-2,
+       "occurredAt":"2026-06-21T12:35:00Z"}'
+```
+
+Der Durchlauf demonstriert die korrekte Verkettung der Business Rules
+(Meldebestand-Erkennung → Sammel-Request → Transportauftrag → Wiederauffüllung) über beide Kontexte hinweg.
+
+## 7.6 Erkenntnisse
+
+**Was gut funktioniert:**
+
+- **Strukturtreue:** Bausteinsicht und Schichtenarchitektur wurden konsistent in Pakete überführt; die Abhängigkeitsrichtung `web → application → domain` blieb erhalten.
+- **Spezifikationsnähe:** Datenmodell, Statuswerte und Endpunkte wurden nahezu 1:1 übernommen. Je präziser die arc42-Vorgaben (insb. Schnittstellen + Datenmodell), desto höher die Konsistenz.
+- **Fachregeln als Code:** Die Business Rules wurden sinnvoll in Domänenmethoden und Application-Logik abgebildet (z. B. Meldebestand, Notfall-Priorität, Idempotenz).
+- **Geschwindigkeit:** In kurzer Zeit entstand eine lauffähige, reviewfähige Implementierungsbasis.
+
+**Grenzen und Risiken:**
+
+- **Mehrdeutigkeiten müssen aufgelöst werden:** Unspezifizierte Punkte (5-Minuten-Fenster, Definition „Hauptzutat") kann das Werkzeug nur per Annahme schließen → **Mensch-im-Loop ist zwingend**.
+- **Keine Verifikation durch das Modell:** Das LLM kann die fachliche Korrektheit nicht garantieren; Build, Tests und Review bleiben in der Verantwortung des Teams.
+- **Technische Detailrisiken:** Versions-/Bibliotheksdetails können fehlerhaft sein (Halluzination); ein automatischer Kompilier-/Testlauf in der Pipeline ist notwendig.
+- **Initial fehlende Tests:** Generierte Erstfassungen enthielten keine automatisierten Tests; diese mussten gezielt nachgefordert werden.
+
+**Maßnahmen zur Qualitätssicherung:**
+
+- Explizite Dokumentation aller Annahmen, Traceability arc42 ↔ Code, manuelles Code-Review sowie verpflichtender `mvn clean verify` mit Tests vor Übernahme.
+
+## 7.7 Fazit
+
+Eine arc42-konforme Architekturbeschreibung ist ein **geeigneter Generierungs-Input**: Aus Bausteinsicht,
+Schnittstellen, Datenmodell und Fachregeln lassen sich konsistente, lauffähige Code-Artefakte ableiten.
+Generative KI **beschleunigt** den Übergang von der Architektur zur Implementierung deutlich, **ersetzt aber
+nicht** Review, Verifikation und fachliche Entscheidungen. Der größte Hebel für die Code-Qualität liegt in der
+**Präzision der Architekturdokumentation** selbst – unklare Stellen im Entwurf werden im Code unmittelbar sichtbar.
